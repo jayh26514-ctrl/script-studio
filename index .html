@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#101114">
+<title>SCRIPT STUDIO</title>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#101114;color:#eee;font-family:Arial,sans-serif}
+header{height:65px;background:#191b20;border-bottom:1px solid #333;display:flex;align-items:center;justify-content:space-between;padding:0 18px}
+.logo{font-size:22px;font-weight:bold;letter-spacing:2px}
+.logo span{color:#e5b85c}
+button{background:#282b33;color:#fff;border:1px solid #444;padding:10px 14px;border-radius:6px;cursor:pointer;margin:3px}
+.primary{background:#e5b85c;color:#171717;font-weight:bold}
+input,textarea{width:100%;padding:12px;background:#20232a;color:white;border:1px solid #444;border-radius:6px;margin:6px 0}
+.auth{max-width:400px;margin:65px auto;background:#191b20;padding:25px;border-radius:12px}
+#app{display:none}
+nav{background:#191b20;padding:12px;display:flex;gap:6px;flex-wrap:wrap}
+main{padding:18px}
+.grid{display:grid;grid-template-columns:250px 1fr;gap:15px}
+.panel{background:#191b20;border:1px solid #333;padding:15px;border-radius:9px}
+.item{padding:12px;border-bottom:1px solid #333;cursor:pointer;overflow-wrap:anywhere}
+.item:hover,.active{color:#e5b85c;background:#252830}
+.editor{min-height:65vh;background:#f8f6ef;color:#222;font-family:Courier New,monospace;font-size:16px;line-height:1.7;padding:30px;resize:vertical}
+.hidden{display:none!important}
+h2{color:#e5b85c}
+.status{font-size:13px;color:#e5b85c}
+@media(max-width:700px){.grid{grid-template-columns:1fr}main{padding:9px}.editor{padding:15px}}
+</style>
+</head>
+
+<body>
+
+<header>
+<div class="logo">SCRIPT <span>STUDIO</span></div>
+<button id="logout" class="hidden">LOGOUT</button>
+</header>
+
+<section id="auth" class="auth">
+<h2>SCRIPT STUDIO</h2>
+<p>Professional Screenwriting Workspace</p>
+<input id="email" type="email" placeholder="Email address">
+<input id="password" type="password" placeholder="Password">
+<button class="primary" id="loginBtn">LOGIN</button>
+<button id="signupBtn">CREATE ACCOUNT</button>
+<p id="authStatus" class="status"></p>
+</section>
+
+<div id="app">
+<nav>
+<button class="primary" id="newProject">+ NEW PROJECT</button>
+<button id="titleBtn">TITLE PAGE</button>
+<button id="txtBtn">EXPORT TXT</button>
+<button id="pdfBtn">EXPORT PDF</button>
+</nav>
+
+<main>
+<section id="dashboard">
+<h2>MY PROJECTS</h2>
+<div id="projects"></div>
+<p id="dashboardStatus" class="status"></p>
+</section>
+
+<section id="studio" class="hidden">
+<button id="backBtn">← PROJECTS</button>
+<h2 id="projectHeading"></h2>
+
+<div class="grid">
+<div class="panel">
+<h3>EPISODES</h3>
+<button id="newEpisode">+ EPISODE</button>
+<div id="episodes"></div>
+<hr>
+<h3>SCENES</h3>
+<button id="newScene">+ SCENE</button>
+<div id="scenes"></div>
+</div>
+
+<div class="panel">
+<input id="sceneHeading" placeholder="INT. LOCATION - DAY">
+<textarea id="editor" class="editor" placeholder="Start writing your screenplay..."></textarea>
+<button class="primary" id="saveScene">SAVE TO CLOUD</button>
+<p id="editorStatus" class="status"></p>
+</div>
+</div>
+</section>
+
+<section id="titlePage" class="panel hidden">
+<button id="titleBack">← BACK</button>
+<h2>SCREENPLAY TITLE PAGE</h2>
+<input id="tpTitle" placeholder="SCREENPLAY TITLE">
+<input id="tpWriter" placeholder="WRITTEN BY">
+<input id="tpContact" placeholder="CONTACT INFORMATION">
+<button class="primary" id="saveTitle">SAVE TITLE PAGE</button>
+<p id="titleStatus" class="status"></p>
+</section>
+</main>
+</div>
+
+<script>
+const SUPABASE_URL = "https://gowuillhtgdkkvmfcmgu.supabase.co";
+const SUPABASE_KEY = "sb_publishable_Ysjc4o037IqmkQFc1n8blw_BoVxUCRB";
+
+const T = {
+  projects: "projects",
+  episodes: "episodes",
+  scenes: "scenes"
+};
+
+let db = null, user = null;
+let projects = [], episodes = [], scenes = [];
+let project = null, episode = null, scene = null;
+
+const $ = id => document.getElementById(id);
+
+function message(id, text) {
+  $(id).textContent = text;
+}
+
+function show(section) {
+  ["dashboard", "studio", "titlePage"].forEach(id => {
+    $(id).classList.toggle("hidden", id !== section);
+  });
+}
+
+function configured() {
+  return SUPABASE_URL.startsWith("https://") &&
+         SUPABASE_KEY.startsWith("sb_publishable_");
+}
+
+async function login() {
+  const { data, error } = await db.auth.signInWithPassword({
+    email: $("email").value.trim(),
+    password: $("password").value
+  });
+  if (error) return message("authStatus", error.message);
+  user = data.user;
+  await startApp();
+}
+
+async function signup() {
+  const { data, error } = await db.auth.signUp({
+    email: $("email").value.trim(),
+    password: $("password").value
+  });
+  if (error) return message("authStatus", error.message);
+  if (!data.session) {
+    return message("authStatus", "Check your email to confirm your account.");
+  }
+  user = data.user;
+  await startApp();
+}
+
+async function logout() {
+  await db.auth.signOut();
+  location.reload();
+}
+
+async function startApp() {
+  $("auth").classList.add("hidden");
+  $("app").style.display = "block";
+  $("logout").classList.remove("hidden");
+  await loadProjects();
+}
+
+async function loadProjects() {
+  const { data, error } = await db.from(T.projects)
+    .select("*")
+    .order("created_at", { ascending: false });
+  if (error) return message("dashboardStatus", error.message);
+  projects = data || [];
+  renderProjects();
+}
+
+function renderProjects() {
+  $("projects").innerHTML = "";
+  projects.forEach(p => {
+    const b = document.createElement("button");
+    b.textContent = p.title || "Untitled";
+    b.onclick = () => openProject(p);
+    $("projects").appendChild(b);
+  });
+}
+
+async function createProject() {
+  const title = prompt("Project name:");
+  if (!title?.trim()) return;
+  const { data, error } = await db.from(T.projects)
+    .insert({
+      owner_id: user.id,
+      title: title.trim(),
+      project_type: "series",
+      title_page: { title: title.trim(), writer: "", contact: "" }
+    })
+    .select()
+    .single();
+  if (error) return message("dashboardStatus", error.message);
+  await loadProjects();
+  await openProject(data);
+}
+
+async function openProject(p) {
+  project = p;
+  $("projectHeading").textContent = p.title;
+  show("studio");
+  await loadEpisodes();
+}
+
+async function loadEpisodes() {
+  const { data, error } = await db.from(T.episodes)
+    .select("*")
+    .eq("project_id", project.id)
+    .order("episode_number");
+  if (error) return message("editorStatus", error.message);
+  episodes = data || [];
+  renderEpisodes();
+  if (episodes.length) await openEpisode(episodes[0]);
+  else {
+    episode = null; scenes = []; renderScenes(); clearEditor();
+  }
+}
+
+function renderEpisodes() {
+  $("episodes").innerHTML = "";
+  episodes.forEach(e => {
+    const b = document.createElement("div");
+    b.className = "item" + (episode && episode.id === e.id ? " active" : "");
+    b.textContent = e.title;
+    b.onclick = () => openEpisode(e);
+    $("episodes").appendChild(b);
+  });
+}
+
+async function createEpisode() {
+  if (!project) return;
+  const title = prompt("Episode title:", `Episode ${episodes.length + 1}`);
+  if (!title?.trim()) return;
+  const { error } = await db.from(T.episodes).insert({
+    project_id: project.id,
+    owner_id: user.id,
+    title: title.trim(),
+    episode_number: episodes.length + 1
+  });
+  if (error) return message("editorStatus", error.message);
+  await loadEpisodes();
+}
+
+async function openEpisode(e) {
+  episode = e;
+  const { data, error } = await db.from(T.scenes)
+    .select("*")
+    .eq("episode_id", e.id)
+    .order("sort_order", { ascending: true });
+  if (error) return message("editorStatus", error.message);
+  scenes = data || [];
+  renderEpisodes();
+  renderScenes();
+  if (scenes.length) selectScene(scenes[0]);
+  else { scene = null; clearEditor(); }
+}
+
+function renderScenes() {
+  $("scenes").innerHTML = "";
+  scenes.forEach(s => {
+    const b = document.createElement("div");
+    b.className = "item" + (scene && scene.id === s.id ? " active" : "");
+    b.textContent = s.heading || "Untitled scene";
+    b.onclick = () => selectScene(s);
+    $("scenes").appendChild(b);
+  });
+}
+
+function selectScene(s) {
+  scene = s;
+  $("sceneHeading").value = s.heading || "";
+  $("editor").value = s.content || "";
+  renderScenes();
+}
+
+function clearEditor() {
+  $("sceneHeading").value = "";
+  $("editor").value = "";
+}
+
+async function createScene() {
+  if (!episode) return alert("Create an episode first.");
+  const heading = prompt("Scene heading:", "INT. LOCATION - DAY");
+  if (!heading?.trim()) return;
+  const nextNum = scenes.length + 1;
+  const { data, error } = await db.from(T.scenes).insert({
+    project_id: project.id,
+    episode_id: episode.id,
+    owner_id: user.id,
+    heading: heading.trim(),
+    content: "",
+    scene_number: nextNum,
+    scene_type: "standard",
+    sort_order: nextNum
+  }).select().single();
+  if (error) return message("editorStatus", error.message);
+  scenes.push(data);
+  renderScenes();
+  selectScene(data);
+}
+
+async function saveScene() {
+  if (!scene) return message("editorStatus", "Select a scene first.");
+  const { error } = await db.from(T.scenes)
+    .update({
+      heading: $("sceneHeading").value,
+      content: $("editor").value
+    })
+    .eq("id", scene.id);
+  if (error) return message("editorStatus", error.message);
+  scene.heading = $("sceneHeading").value;
+  scene.content = $("editor").value;
+  renderScenes();
+  message("editorStatus", "Saved to cloud successfully ✓");
+}
+
+function showTitle() {
+  if (!project) return alert("Open a project first.");
+  show("titlePage");
+  const saved = project.title_page || {};
+  $("tpTitle").value = saved.title || project.title || "";
+  $("tpWriter").value = saved.writer || "";
+  $("tpContact").value = saved.contact || "";
+  message("titleStatus", "");
+}
+
+async function saveTitle() {
+  if (!project) return;
+  const data = {
+    title: $("tpTitle").value,
+    writer: $("tpWriter").value,
+    contact: $("tpContact").value
+  };
+  const { error } = await db.from(T.projects)
+    .update({ title_page: data })
+    .eq("id", project.id);
+  if (error) return message("titleStatus", error.message);
+  project.title_page = data;
+  message("titleStatus", "Title page saved to cloud ✓");
+}
+
+function screenplayText() {
+  let output = (project?.title || "SCREENPLAY") + "\n\n";
+  episodes.forEach(e => {
+    output += e.title + "\n\n";
+    scenes.filter(s => s.episode_id === e.id).forEach(s => {
+      output += (s.heading || "") + "\n" + (s.content || "") + "\n\n";
+    });
+  });
+  return output;
+}
+
+function download(content, name, type) {
+  const url = URL.createObjectURL(new Blob([content], { type }));
+  const a = document.createElement("a");
+  a.href = url; a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function exportTXT() {
+  download(screenplayText(), "screenplay.txt", "text/plain");
+}
+
+function exportPDF() {
+  if (!project) return;
+  const { jsPDF } = window.jspdf;
+  const pdf = new jsPDF();
+  pdf.setFont("courier");
+  let y = 20;
+  const lines = pdf.splitTextToSize(screenplayText(), 170);
+  lines.forEach(line => {
+    if (y > 280) { pdf.addPage(); y = 20; }
+    pdf.text(line, 20, y); y += 7;
+  });
+  pdf.save("screenplay.pdf");
+}
+
+$("loginBtn").onclick = login;
+$("signupBtn").onclick = signup;
+$("logout").onclick = logout;
+$("newProject").onclick = createProject;
+$("newEpisode").onclick = createEpisode;
+$("newScene").onclick = createScene;
+$("saveScene").onclick = saveScene;
+$("backBtn").onclick = async () => { show("dashboard"); await loadProjects(); };
+$("titleBtn").onclick = showTitle;
+$("titleBack").onclick = () => show(project ? "studio" : "dashboard");
+$("saveTitle").onclick = saveTitle;
+$("txtBtn").onclick = exportTXT;
+$("pdfBtn").onclick = exportPDF;
+
+async function init() {
+  if (!configured()) {
+    message("authStatus", "Add your Supabase URL and Publishable Key first.");
+    return;
+  }
+  db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  db.auth.onAuthStateChange((_event, session) => {
+    if (session && !user) {
+      user = session.user;
+      startApp();
+    }
+  });
+  const { data, error } = await db.auth.getSession();
+  if (error) return message("authStatus", error.message);
+  if (data.session) {
+    user = data.session.user;
+    await startApp();
+  }
+}
+init();
+</script>
+</body>
+</html>
